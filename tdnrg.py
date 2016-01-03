@@ -1,26 +1,18 @@
 from scipy import *
 from matplotlib.pyplot import *
-from hexpand.blockh import anti_blockize_tr
 from scipy import sparse as sps
-from core.mathlib import lorenzian,gaussian,log_gaussian,log_gaussian_fast,log_gaussian_var
+
+from mathlib import lorenzian,gaussian,log_gaussian,log_gaussian_fast,log_gaussian_var
 from binner import get_binner
 import pdb,time
 
 class DMManager(object):
     '''
     Manager class for full density matrix.
-
-    H:
-        the RGHamiltonian instance.
-    T:
-        the temperature.
     '''
-    def __init__(self,H,T):
-        self.Utracker=H.trackers['U']
-        self.bmtracker=H.trackers['block_marker']
-        self.Atracker=H.trackers['A']
-        self.Etracker=H.trackers['E_rescaled']
-        self.H=H
+    def __init__(self,evolutor,elist):
+        self.evolutor=evolutor
+        self.elist=elist
         self.T=T
         self.rholist=[]
         self.ops={}
@@ -37,9 +29,8 @@ class DMManager(object):
             which part of rho, 'kp'/'dis'/'all'(default)
         '''
         T=self.T
-        etracker=self.Etracker
-        bmtracker=self.bmtracker
-        E=etracker.get(m)
+        E=self.elist[m]
+        kpmask=self.evolutor.kpmask(m)
         E=E-E.min()
         if T==0:
             rho=(E<degeneracy_eps).astype('complex128')
@@ -47,44 +38,13 @@ class DMManager(object):
             rho=exp(-E/T)
         if which=='kp':
             if etracker!=None and etracker.beforetrunc:
-                rho=rho[bmtracker.get(m).kpmask]
+                rho=rho[kpmask]
         elif which=='dis':
-            dismask=~bmtracker.get(m).kpmask
+            dismask=~kpmask
             rho=rho[dismask]
         Z=sum(rho)
         rho/=Z
         return sps.diags(rho,0)
-
-class RDMManager(DMManager):
-    '''Reduced Density Matrix - NRG'''
-    def __init__(self,H,T,degeneracy_eps=1e-10):
-        super(RDMManager,self).__init__(H=H,T=T)
-        self.init_rho_list(degeneracy_eps)
-
-    def init_rho_list(self,degeneracy_eps=1e-15):
-        '''
-        initialize reduced density matrix.
-        '''
-        T=self.T
-        #get rho of the last recursion.
-        N=self.H.N
-        rho0=self.get_rho0(N-1,which='full',degeneracy_eps=degeneracy_eps).tocsr()
-        rlist=[rho0]
-        t0=time.time()
-        for mi in xrange(N-2,-1,-1):
-            kpmask=self.bmtracker.get(mi+1).kpmask
-            A=self.Atracker.get(mi+1)
-            hndim=len(A)
-            rhol=[]
-            for i in xrange(hndim):
-                Ai=A[i].tocsc()[:,kpmask].tocsr()
-                rhol.append(Ai.dot(rho0.dot(Ai.T.conj()).tocsc()))
-            rho0=sum(rhol,axis=0)
-            rlist.append(rho0)
-        rlist.reverse()
-        t1=time.time()
-        print 'get rho %s(time ellapse: %s)'%(mi,t1-t0)
-        self.rholist=rlist
 
 class FDMManager(DMManager):
     '''
@@ -111,8 +71,8 @@ class FDMManager(DMManager):
         for m in xrange(n,-1,-1):
             if m==n:
                 #get the DD component
-                kpmask=self.bmtracker.get(m).kpmask
-                E=self.Etracker.get(m)
+                kpmask=self.evolutor.kpmask(m)
+                E=self.elist[m]
                 E=E-E.min()
                 if T==0:
                     rho=complex128(E<degeneracy_eps)
@@ -131,10 +91,10 @@ class FDMManager(DMManager):
             else:
                 #infomation of last iteration
                 rho0=rholist[-1]
-                mask=self.bmtracker.get(m+1).kpmask
+                mask=self.evolutor.kpmask(m+1)
                 if n!=N-1 and m==n-1:
                     mask=~mask
-                A=self.Atracker.get(m+1)
+                A=self.evolutor.A(m+1)
                 rl=[]
                 for i in xrange(len(A)):
                     Ai=A[i].tocsc()[:,mask].tocsr()
@@ -186,7 +146,7 @@ class FDMManager(DMManager):
         bmtracker=self.bmtracker
         oplist=[]
         for n in xrange(N):
-            kpmask=bmtracker.get(n).kpmask
+            kpmask=self.evolutor.kpmask(n)
             dsmask=~kpmask
             if n==N-1:
                 kpmask,dsmask=dsmask,kpmask
@@ -200,22 +160,19 @@ class FDMManager(DMManager):
         '''
         get the spectrum function of <<B|C>>.
 
-        B/C:
-            label of the two operators.
-        binner:
-            the binner instance to store data.
-        H:
-            `FF`/`FT`/`TF`/`TT` -> hermion conjugate if `T`, the first and second character indicate B C respectively.
-        *return*:
-            a tuple of -> (logarithmic frequency mesh, a specturm defined on this mesh)
+        Parameters:
+            :B/C: <OpUnit>, two operators.
+            :binner: the binner instance to store data.
+            :H: `FF`/`FT`/`TF`/`TT` -> hermion conjugate if `T`, the first and second character indicate B C respectively.
+
+        Return:
+            A tuple of -> (logarithmic frequency mesh, a specturm defined on this mesh)
         '''
         print 'Calculating Spectrum of <<%s(t)|%s>>...'%(B if H[0]=='F' else B+'.H',C if H[1]=='F' else C+'.H')
         N=self.H.N
-        EN=self.Etracker.get(N-1)
+        EN=self.elist[N-1]
 
         rholist=self.rholist   #indexing -> [n][m]
-        B=self.ops.get(B)
-        C=self.ops.get(C)
         if rholist==[] or B is None or C is None:
             raise Exception('Data not prepaired! Please intialize rho and operators!')
         dps=[]
@@ -227,10 +184,10 @@ class FDMManager(DMManager):
                 continue
             rl=rholist[n]
             for m in xrange(n,-1,-1):
-                cm=C[m]
-                bm=B[m]
-                em=self.Etracker.get(m)
-                kpmask=self.bmtracker.get(m).kpmask
+                B=self.evolutor.opat(B,m)
+                C=self.evolutor.opat(C,m)
+                em=self.Elist[m]
+                kpmask=self.evolutor.kpmask(m)
                 EK,ED=em[kpmask],em[~kpmask]
                 rhomn=rl[m].tocsc()
                 WL=[];EL=[]

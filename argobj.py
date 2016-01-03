@@ -1,21 +1,21 @@
 from scipy import *
 from matplotlib.pyplot import *
 from scipy.interpolate import splrep,splev,interp1d
-from core.mathlib import log_gaussian,gaussian,lorenzian
-from core.utils import matrix_spline,H2G,bcast_dot
-from core.utils import kk_smooth as kk
-from core.matrixlib import eigen_combine,eigh_sorted,eig_sorted
-from rgoplib import rgop_c,rgop_n,rgop_c3,rgop_cd
-from tdnrg import FDMManager,RDMManager
 from scipy.sparse import issparse
 from scipy.interpolate import InterpolatedUnivariateSpline as spline1d
 from scipy.interpolate import *
 from numpy.linalg import inv,eigh
-from rgobj import RGRequirement
-from binner import get_binner
 from copy import deepcopy
 from setting.local import COMM,SIZE,RANK
 import pdb,time,warnings,pickle
+
+from binner import get_binner
+from mathlib import log_gaussian,gaussian,lorenzian
+from utils import matrix_spline,H2G,bcast_dot
+from utils import kk_smooth as kk
+from matrixlib import eigen_combine,eigh_sorted,eig_sorted
+from rgoplib import rgop_c,rgop_n,rgop_c3,rgop_cd
+from tdnrg import FDMManager,RDMManager
 
 def get_expect_RDM(scale,dm,which,smearing_method='log_gaussian',b=0.4,diag=False):
     '''
@@ -75,7 +75,7 @@ def get_expect_RDM(scale,dm,which,smearing_method='log_gaussian',b=0.4,diag=Fals
         fupd,fdnd=fds=ftrackers[0].get(i).tocsr(),ftrackers[1].get(i).tocsr()  #[fupd,fdnd]
         fffs=ffftrackers[0].get(i).tocsr(),ffftrackers[1].get(i).tocsr()  #[fupd,fdnd]
         rho=dm.rholist[i]
-        rescalefactor=1 if i==0 else 1./scale.scaling_factor[i-1]
+        rescalefactor=1 if i==0 else 1./scale.get_scaling_factor(i)
         Ei=etracker.get(i)
         if needtrunc:
             Ei=Ei[bmtracker.get(i).kpmask]
@@ -110,12 +110,10 @@ def get_expect_RDM(scale,dm,which,smearing_method='log_gaussian',b=0.4,diag=Fals
     wlist=wlist[rightorder];Alist=Alist[rightorder];Blist=Blist[rightorder]
     return wlist[1:-1],Alist[1:-1],Blist[1:-1]
 
-def get_expect_FDM(scale,dm,opspace,binner,diag=False):
+def get_expect_FDM(dm,opspace,binner,diag=False):
     '''
     Get spectrum for zero temperature with Full-density matrix.
 
-    scale:
-        the scale.
     dm:
         an DMManager instance.
     opspace:

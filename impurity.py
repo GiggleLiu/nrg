@@ -1,9 +1,9 @@
-#!/usr/bin/python
 from numpy import *
 
 from tba.hgen import SuperSpaceConfig,sz,sx,sy
+from tba.hgen import op_U,Operator
 
-__all__=['NRGImp','AndersonImp','KondoImp','SCImp','NullImp']
+__all__=['NRGImp','AndersonImp','KondoImp','SC2Anderson','NullImp']
 
 class NRGImp(object):
     '''
@@ -13,13 +13,14 @@ class NRGImp(object):
         self.spaceconfig=spaceconfig
         self.H0=H0
 
-    def show_spectrum(self,**kwargs):
+    def get_interaction(self):
         '''
-        Show spectrum function Delta(w).
+        Get the interaction term.
+        
+        Return:
+            <Operator>, the interaction part.
         '''
-        wlist=linspace(-1.5,1.5,200)
-        dl=array([self.Delta(w) for w in wlist])
-        plot(wlist,dl,**kwargs)
+        raise NotImplementedError()
 
 class KondoImp(NRGImp):
     '''
@@ -45,7 +46,7 @@ class AndersonImp(NRGImp):
     def __init__(self,ed=0.,U=0.,Bz=0.):
         scfg=SuperSpaceConfig([1,2,1,1])
         self.U=U
-        self.H0=ed*identity(2)+Bz*sz
+        H0=ed*identity(2)+Bz*sz
         super(AndersonImp,self).__init__(scfg,H0)
 
     @property
@@ -66,19 +67,11 @@ class AndersonImp(NRGImp):
     H0: %s
     '''%(self.ed,self.U,self.Bz,self.H0)
 
-class SCImp(NRGImp):
-    '''
-    Superconducting impurity for NRG.
-    '''
-    def __init__(self,ed=0.,U=1.,Bz=0.):
-        self.U=U
-        self.ed=ed
-        self.Bz=Bz
-        scfg=SuperSpaceConfig([1,2,1,1])
-
-        print 'check!'
-        self.H0=(ed+U/2.)*sz+(U/2.+Bz)*identity(2)
-        super(SCImp,self).__init__(scfg,self.H0)
+    def get_interaction(self):
+        '''
+        Get the interaction operator.
+        '''
+        return self.U*op_U(self.spaceconfig)
 
 class NullImp(NRGImp):
     '''
@@ -88,4 +81,18 @@ class NullImp(NRGImp):
         scfg=SuperSpaceConfig([1,2,1,1])
         H0=zeros([2,2])
         super(NullImp,self).__init__(scfg,H0)
+
+    def get_interaction(self):
+        '''
+        Get the interaction operator.
+        '''
+        return Operator('Null',self.spaceconfig)
+
+def SC2Anderson(ed=0.,U=1.,Bz=0.):
+    '''
+    Transforn a superconducting Anderson problem to normal base.
+    '''
+    scfg=SuperSpaceConfig([1,2,1,1])
+    return AndersonImp(ed=U/2.+Bz,U=-U,Bz=(ed+U/2.))
+
 

@@ -1,112 +1,79 @@
 from scipy import *
 from matplotlib.pyplot import *
-from setting.local import COMM,SIZE,RANK
-from tdnrg import RGTimeLine
-from core.phcore import FigManager
-from rgobj import RGobj
-from argobj import ARGobj
-from scaledchain import ScaledChain
 import pdb,time
+
+#from tdnrg import RGTimeLine
+from scaledchain import ScaledChain
+from rglib.hexpand import MaskedEvolutor,FermionHGen
+from blockmatrix import get_bmgen,tobdmatrix
+from utils import plot_spectrum
+from impurity import NullImp
+
+#MPI setting
+try:
+    from mpi4py import MPI
+    COMM=MPI.COMM_WORLD
+    SIZE=COMM.Get_size()
+    RANK=COMM.Get_rank()
+except:
+    COMM=None
+    SIZE=1
+    RANK=0
+
+def NRGSolve(scaledchain,good_number='NM',maxN=600,show_spec=True):
+    '''
+    Using NRG iteration method to solve a chain.
+
+    Parameters:
+        :chain: <ScaledChain>, the scaled chain for nrg.
+        :good_number: str('N','NM','M'), the good quantum number.
+        :maxN: integer, the maximum retained energy levels.
+        :show_spec: bool, show spectrum during iteraction.
+
+    Return:
+        tuple of (evolutor, elist, bms), the <Evolutor>, energy of each iteraction, block marker of each iteraction.
+        
+        Note, elist is rescaled back.
+    '''
+    nsite=scaledchain.nsite
+    is_ghost=isinstance(scaledchain.impurity,NullImp)
+    scaling_factors=scaledchain.scaling_factors
+    spaceconfig=scaledchain.impurity.spaceconfig
+    h=scaledchain.get_opc()
+
+    expander=FermionHGen(spaceconfig=spaceconfig,evolutor=MaskedEvolutor(hndim=spaceconfig.hndim))
+    bmgen=get_bmgen(spaceconfig,good_number)
+    elist=[]
+    bms=[]
+    for i in xrange(nsite):
+        print 'Running iteraction %s'%(i+1)
+        ops=h.filter(lambda sites:all(sites<=i) and (i in sites))
+        H=expander.expand(ops)
+        bm=bmgen.update_blockmarker(expander.block_marker,kpmask=expander.evolutor.kpmask(i-1))
+        H_bd=bm.blockize(H)
+        if not bm.check_blockdiag(H_bd):
+            raise Exception('Hamiltonian is not block diagonal with good quantum number %s'%good_number)
+        H=tobdmatrix(H_bd,bm)
+        E,U=H.eigh()
+        E_sorted=sort(E)
+        kpmask=(E<=E_sorted[min(maxN,len(E_sorted))-1])
+        expander.trunc(U=U.tocoo(),block_marker=bm,kpmask=kpmask)
+        if i!=nsite-1:
+            expander.H*=scaling_factors[i+1]/scaling_factors[i]
+        if show_spec:
+            plot_spectrum(E_sorted[:20]-E_sorted[0],offset=[i,0.],lw=1)
+            gcf().canvas.draw()
+            pause(0.01)
+        elist.append(E/scaling_factors[i])
+        bms.append(bm)
+    return expander.evolutor,bms,elist
 
 class NRGEngine(object):
     '''
     An Engine for Numerical Renormalization Group Theory.
     '''
     def __init__(self,threadz=False):
-        self.mops=[]
-        self.mops_a=[]
-        self.figmanager=FigManager()
-        self.chaindict={}
-        self.chain=None
         self.threadz=threadz
-        self.setting={
-                }
-
-    @property
-    def trackrho(self):
-        '''return True if need to track rho.'''
-        return len(self.mops_a)>0
-
-    def __cope_requirements__(self,chain):
-        '''
-        cope with requirements.
-
-        chain:
-            the chain requirements are for.
-        '''
-        if self.trackrho:
-            chain.HNtrackrho(True)
-        for op in self.mops+self.mops_a:
-            target_chain=op.setting['target_chain']
-            if target_chain==None or any(target_chain==chain.label):
-                if isinstance(op,RGobj):
-                    chain.register_op(op)
-                if op.subtract_env and chain.ghost==None:
-                    chain.create_ghost()
-                for rq in op.requirements:
-                    if rq.tp=='op':
-                        chain.HNregistercovop(rq.info['kernel'])
-                        if op.subtract_env:
-                            chain.ghost.HNregistercovop(rq.info['kernel'])
-                    if rq.islist:
-                        chain.HNtrack(rq)
-    
-    def register_measure(self,op,target_chain=None,graphic=True):
-        '''
-        Register Operators for measurements.
-        '''
-        op.setting['target_chain']=target_chain
-        if isinstance(op,RGobj):
-            self.mops.append(op)
-            if graphic and (RANK==0 or not self.threadz):
-                fig,ax,pls=self.figmanager.register(op.label,npls=op.datalen)
-                ax.set_xlabel('Temperature')
-                ax.set_ylabel(op.label)
-        elif isinstance(op,ARGobj):
-            self.mops_a.append(op)
-        else:
-            raise Exception('Error','Measurable objects not qualified!')
-
-    def register_chain(self,chain):
-        '''
-        multiple chain support.
-        '''
-        self.chains.append(chain)
-
-
-    def do_measure(self,chain):
-        '''
-        Measure An operator.
-        
-        chain:
-            the chain to measure.
-        '''
-        scale=chain.scale
-        N=scale.pinpoint
-        beta=scale.get_beta()
-        Ntick=5
-        mops=chain.cache['mops']
-        HN=chain.HN
-        ghost_on=chain.ghost!=None
-
-        for opname in mops:
-            op=mops[opname]
-            #if N is not a measure point of op, skip.
-            if not op.measurepoint(N):
-                continue
-            #mesure
-            mval=[]
-            for i in xrange(scale.nz):
-                cmval=op.get_expect(HN[i],beta=beta)
-                if op.subtract_env:
-                    cmval-=chain.ghost.cache['mops'][opname].get_expect(chain.ghost.HN[i],beta=beta)
-                mval.append(cmval)
-
-            #update values of operator(the real chain but not the ghost one).
-            op.update(mval)
-            #display it
-            temperature=append([1.],1./chain.scale.scaling_factor[:N+1])/0.75
-            op.show_flow(graph=self.figmanager[op.label],xdata=temperature)
 
     def run(self,chain):
         '''
@@ -119,11 +86,6 @@ class NRGEngine(object):
         chain0=chains[0]
         Ns=chain0.scale.N
         gatherH=len(self.mops)>0
-
-        #initialize Hamiltonians and operators of chain
-        for ichain,ch in enumerate(chains):
-            print '\nCoping requirements for chain-%s.'%(ch,)
-            self.__cope_requirements__(ch)
 
         for i in xrange(-1,Ns):
             print '\nCalculating H(i) for %s-th site(-1 for impurity).'%(i,)

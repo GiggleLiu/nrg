@@ -1,136 +1,18 @@
-#!/usr/bin/python
 from scipy import *
 from matplotlib.pyplot import *
 from scipy.interpolate import splrep,splev
-from hgen.spaceconfig import SuperSpaceConfig
-from hgen.oplib import op_M
-from core.matrixlib import bcast_dot
-from core.utils import plot_spectrum,sx,sy,sz
-from core.phcore import Mobj,OpArray
-from core.mathlib import log_gaussian,gaussian,lorenzian
-from hexpand.hexpand import op2expand
-from rgoplib import rgop_c,rgop_n
-from scipy.sparse import issparse
-from scipy.interpolate import InterpolatedUnivariateSpline as spline1d
-import pdb,time,warnings
+import pdb,time
 
-warnings.simplefilter('once',UserWarning)
+from tba.hgen import op_M
 
-class RGRequirement(object):
-    '''
-    specify a requirement.
+__all__=['RGobj','RGobj_Tchi']
 
-    label:
-        the label.
-    tp:
-        the type, `op`/`attr`/`bool`
-    islist:
-        get the list if True(False by default).
-    beforetrunc:
-        get it before truncation if True(False by default).
-    info:
-        more information.
-    '''
-    def __init__(self,label,tp,islist=False,beforetrunc=False,info=None):
-        self.label=label
-        self.tp=tp
-        self.islist=islist
-        self.beforetrunc=beforetrunc
-        if info is None:
-            self.info={}
-        else:
-            self.info=info
-
-    def __str__(self):
-        return self.label+'('+self.tp+')'
-
-class RGobj(Mobj):
+class RGobj(object):
     '''
     Measuring objects used for NRG.
-
-    label:
-        the label.
-    requirements:
-        the required variables.
-    plotmode: plot mode,
-    NOTE:
-        4 plot modes are usable, you can specify it by accessing self.setting['plotmode'].
-        * mixing -> mixing data with neghbors to avoid odd-even steps.
-        * even -> get even part only.
-        * odd -> get odd part only.
-        * both -> get original data.
     '''
-    def __init__(self,label,requirements=None,plotmode='mixing',*args,**kwargs):
-        super(RGobj,self).__init__(label,*args,**kwargs)
-        self.requirements=[]
-        self.subtract_env=False
-        if not requirements is None:
-            self.requirements=requirements
-        self.setting['plotmode']=plotmode
-
-    def show_flow(self,graph,xdata,**kwargs):
-        '''
-        Get suitible scale,data to plot.
-
-        scale:
-            the x-axis
-        '''
-        if graph:
-            fig,ax,pls=graph
-        else:
-            ax=gca()
-            pls=ax.plot([],[],**kwargs)
-        ax.set_xscale('log')
-        rcParams['xtick.labelsize']=14
-        rcParams['ytick.labelsize']=14
-        rcParams['axes.labelsize']=14
-
-        mode=self.setting['plotmode']
-        flow=array(self.flow)
-        if xdata is None:
-            if mode=='mixing':
-                warnings.warn('xdata should be specified to use mixing mode for display flow data. switching to plot mode `both`.')
-                mode='both'
-            xdata=arange(self.nval)
-        elif mode=='even':
-            xdata,flow=xdata[::2],flow[::2]
-        elif mode=='odd':
-            xdata,flow=xdata[1::2],flow[1::2]
-        elif mode=='mixing':
-            if len(flow)>2:
-                #smearing flow-data
-                flowm1=roll(flow,1,axis=0)
-                flowm1[0]=flow[0]
-                flowp1=roll(flow,-1,axis=0)
-                flowp1[-1]=flow[-1]
-
-                tlm1=roll(xdata,1)
-                tlm1[0]=xdata[0]
-                tlp1=roll(xdata,-1)
-                tlp1[-1]=xdata[-1]
-                flow2=copy(flow)
-                flow=0.5*(flow+flowm1+(flowp1-flowm1)*((xdata-tlm1)/(tlp1-tlm1)))
-        else:
-            warnings.warn('plot mode unknown @%s'%self)
-
-        pls[0].set_xdata(xdata)  #update data
-        pls[0].set_ydata(flow)  #update data
-        ax.set_ylabel(self.label)
-        ax.set_xlabel(r'$k_BT$')
-        ax.set_ylim(0,0.25)
-        ax.set_xlim(xdata.min(),xdata.max())
-        if graph:
-            fig.canvas.draw()
-
-    def update(self,mval):
-        '''
-        Update the flow.
-        '''
-        #filer out None value and update flow.
-        if mval[0] is None:
-            return
-        mval=mean(mval,axis=0)
-        self.flow.append(mval)
+    def measure(self,*args,**kwargs):
+        raise NotImplementedError()
 
 class RGobj_N(RGobj):
     '''
@@ -174,87 +56,69 @@ class RGobj_Tchi(RGobj):
     Physics quantity T*chi for spin (non-)conservative systems.
     T*chi=<sz^2>-<sz>^2.
 
-    label:
-        the label, by default it is 'chi'.
     mode:
         's' -> spin is a good quantum number for hamiltonian.
-        'on' -> use operator mode with operators defined on all sites.
-        'o1' -> use operator mode with operators defined on first site.
+        'on' -> using subtraction of spin z operators.
     spaceconfig:
-        it should be provided if it runs in 'o' mode.
+        it should be provided if it runs in 'on' mode.
     '''
-    def __init__(self,label='chi',mode='s',spaceconfig=None,*args,**kwargs):
-        super(RGobj_Tchi,self).__init__(label,*args,**kwargs)
+    def __init__(self,mode='s',spaceconfig=None):
+        super(RGobj_Tchi,self).__init__()
+        assert(mode in ['on','s'])
+        if mode=='on': assert(spaceconfig is not None)
         self.mode=mode
-        if mode=='s':
-            self.subtract_env=True
-        elif mode=='o1':
-            self.__init_ops__(spaceconfig,'expand')
-        elif mode=='on':
-            self.subtract_env=True
-            self.__init_ops__(spaceconfig,'duplicate')
+        self.spaceconfig=spaceconfig
 
-    def __init_ops__(self,spaceconfig,mode):
-        '''
-        Initialize required oprators,
+        if mode=='on':
+            sz=op_M(spaceconfig,direction='z')()/2
 
-        spaceconfig:
-            the configuration of space.
-        '''
-        sz=op_M(spaceconfig,direction='sz')()/2
-        sz=sz.view(OpArray)
-        sz.label='sz'
-        sz=op2expand(sz,expansion_method=mode,starting_level=1)
-        self.requirements.append(RGRequirement(sz.label,tp='op',info={'kernel':sz}))
-
-    def get_expect(self,HN,*args,**kwargs):
+    def measure(self,data,elist,scaling_factors,beta_factor=0.4,M_axis=None,*args,**kwargs):
         '''
         Get the expectation value of Tchi.
 
-        HN:
-            the hamiltonian instance.
+        Parameters:
+            :data: <BlockMarker>/<MPS>, the data to measure.
+            :elist: list of length nsite, a list of rescaled energy.
+            :scaling_factors: 1D array, the scaling factors.
+            :beta_factor: float, the factor for beta with respect to current scaling factor.
+            :M_axis: integer, the axis of good quantum number M.
         '''
-        if self.mode=='o1' or self.mode=='on':
-            return self.__get_expect_o__(HN,*args,**kwargs)
-        else:
-            return self.__get_expect_s__(HN,*args,**kwargs)
+        if M_axis is None and self.mode=='s':
+            raise ValueError('please specify the spin axis of the block marker.')
+        res=[]
+        nsite=len(elist)
+        beta_list=beta_factor*scaling_factors
+        for j in xrange(nsite):
+            if self.mode=='on':
+                siself.__get_expect_o__(mps=data[j],elist=elist[j],beta=beta_list[j],*args,**kwargs)
+            else:
+                si=self.__get_expect_s__(block_marker=data[j],E_true=elist[j],beta=beta_list[j],M_axis=M_axis,*args,**kwargs)
+            res.append(si)
+        return array(res)
 
-    def __get_expect_s__(self,HN,beta,*args,**kwargs):
+    def __get_expect_s__(self,block_marker,E_true,beta,M_axis):
         '''
         Get expectation value of sussceptibility chi.
         In the Q,S,m revserved case, we can use the following relation ->
             chi = S(S+1)/3 x (2*S+1) - sum(sz**2 for sz in range(-S,S))
 
-        HN:
-            an instance of RGHamiltonian.
-        beta:
-            the inverse of temperature.
+        Parameters:
+            :block_marker, M_axis: the block marker and the axis of good quantum number 'M'.
+            :E_true: the energy list rescaled back.
+            :beta: the inverse temperature.
         '''
-        E=HN.E_rescaled
-        EG=E.min()
-        Z=sum(exp(-beta*(E-EG)))
+        E=E_true-E_true.min()
+        Z=sum(exp(-beta*E))
         mval=0.
         szm=0.  #mean of Sz
-        if HN.reserved_quantities=='QSm':
-            rescalefactor=HN.rescalefactor
-            for block in HN.blocks:
-                rho=sum(exp(-beta*(block.E*rescalefactor-EG)))
-                ind=block.indexer
-                #ind is (Q,Sz), each energy represents (2*S+1) dengeneracy.
-                S=ind[1]
-                mval+=rho*(S*(S+1)*(2*S+1)/3)/Z
-        elif HN.reserved_quantities=='m' or HN.reserved_quantities=='Nm':
-            bmarker=HN.block_marker
-            s=0
-            for i in xrange(bmarker.nblock2):
-                Ei=bmarker.extract_block(E,i,j=None,trunced=True)
-                rho=sum(exp(-beta*(Ei-EG)))
-                #ind is Sz
-                Q,sz=HN.__decode_token__(HN.ind2token(i))
-                mval+=rho*sz**2/Z
-                szm+=rho*sz/Z
-        else:
-            raise Exception('Error','matrix with reserved quantities %s not supported in RGObj_Tchi!'%HN.reserved_quantities)
+        labels=block_marker.labels
+        for i in xrange(block_marker.nblock):
+            Ei=block_marker.extract_block(E,i)
+            rho=sum(exp(-beta*Ei))
+            #ind is Sz
+            sz=labels[i][M_axis]/2.
+            mval+=rho*sz**2/Z
+            szm+=rho*sz/Z
         mval-=szm**2
         return mval
 
@@ -268,406 +132,7 @@ class RGobj_Tchi(RGobj):
         beta:
             the inverse of temperature.
         '''
-        opsz=HN.collect_op('sz')
-        opsz2=opsz.dot(opsz)
-        szm=HN.get_expect('sz',T=1./beta,*args,**kwargs).real
-        sz2m=HN.get_expect(opsz2,T=1./beta,*args,**kwargs).real
-        return (sz2m-szm**2)
-
-class RGobj_A(RGobj):
-    '''
-    Spectrum function for specific site.
-    a flow element is defined as [w,A(w),broadening]
-
-    label:
-        the label.
-    spinindex/site:
-        the specific site and spinindex to measure.
-    T:
-        the temperature, default is 0
-    wfactor:
-        the relative w to measure with respect to the energy scale at each expansion.
-    bfactor:
-        broadening factor.
-    '''
-    def __init__(self,label='A',spinindex=0,site=0,T=0,wfactor=2.,logscale=False,continuate=None,*args,**kwargs):
-        super(RGobj_A,self).__init__(label,*args,**kwargs)
-        self.site=site
-        self.mode=None
-        self.spinindex=spinindex
-        self.setting.update({
-            'wfactor':wfactor,
-            'bfactor':0.5,
-            'smearing_method':'gaussian',
-            'continuate':continuate,
-        })
-        self.T=T
-        self.stopped=False   #to tell if it will continue updating spectrums(used in finite temperature).
-        self.logscale=logscale
-
-    def setup_normal(self):
-        '''
-        set mode to `normal` - choose a w to update at each iteration.
-        '''
-        self.mode='normal'
-        rop=rgop_c(self.site,self.spinindex)
-        self.requirements.append(RGRequirement(rop.label,tp='op',info={'kernel':rop}))
-
-    def setup_sigma(self):
-        '''set mode to `sigma` - use bulla's sigma method to get A.'''
-        self.mode='sigma'
-        rop=rgop_c(self.site,self.spinindex)
-        self.requirements.append(RGRequirement(rop.label,tp='op',info={'kernel':rop}))
-
-
-    def setup_rho(self,N):
-        '''
-        set mode to `rho` - update at the last iteration, done by extracting information from reduced density matrix.
-
-        N:
-            the point to decided the lowest energy.
-        '''
-        self.mode='rho'
-        rop=rgop_c(self.site,self.spinindex)
-        self.requirements.append(RGRequirement('E_rescaled',tp='attr',islist=True))
-        self.requirements.append(RGRequirement('U',tp='attr',islist=True))
-        self.requirements.append(RGRequirement('blocks',tp='attr',islist=True))
-        self.requirements.append(RGRequirement(rop.label,tp='op',info={'kernel':rop},islist=True))
-        self.setting['rho-measurepoint']=N
-        self.cache['flist']=[]
-        self.cache['elist']=[]
-        self.cache['rslist']=[]
-
-    def set_smearing(self,smearing_method,b=None):
-        '''
-        Set Smearing method.
-
-        smearing_method:
-            method for smearing peaks.
-            'gaussian'(default): use gaussian peak.
-            'log_gaussian': use log_gaussian peak(symmetric function).
-            'lorenzian': use lorenzian peak.
-        b:
-            the broadening factor.
-        '''
-        self.setting['smearing_method']=smearing_method
-        if b!=None:
-            self.setting['bfactor']=b
-
-    def __get_w__(self,wunit):
-        '''
-        Get w-list and b for evaluation
-        '''
-        w=self.setting['wfactor']*wunit
-        smearing_method=self.setting['smearing_method']
-        #gate value to view energy the same(to detect degeneracy).
-        gate=wunit*1e-4
-        ws=array([-w,w])
-        return ws
-
-    def __smear__(self,x,mean,b=None):
-        '''smear datas.
-        
-        x:
-            a list of w.
-        mean:
-            a list of energy.
-        b:
-            broadening
-        '''
-        smearing_method=self.setting['smearing_method']
-        bfactor=b if b!=None else self.setting['bfactor']
-        b=array([bfactor]*len(x)).reshape(x.shape)
-        if smearing_method=='log_gaussian':
-            res=log_gaussian(x,mean,b.reshape(x.shape))
-            return res
-        elif smearing_method=='gaussian':
-            return gaussian(x,mean,b)
-        elif smearing_method=='lorenzian':
-            return lorenzian(x,mean,b)
-        else:
-            warnings.warn('Unknow smearing method -set to default `gaussian`')
-            return gaussian(x,mean,b)
-
-    def __get_expect_0K__(self,spinindex,HN,beta,show_spec=True,*args,**kwargs):
-        '''
-        Get spectrum for zero temperature(with block spectrum only).
-
-        HN:
-            an instance of RGHamiltonian.
-        beta:
-            the inverse of temperature.
-        show_spec:
-            show spectrum within each recursion.
-        '''
-        rescalefactor=HN.rescalefactor
-        label='f%s%s'%(self.site,'up' if spinindex==0 else 'dn')
-        E=HN.E_rescaled
-        EG=E.min()
-        gate=rescalefactor*1e-4
-        Z=sum((E-EG)<gate)
-        A=0.
-        ws=self.__get_w__(rescalefactor)
-        fop=HN.cov_ops[label].data
-        HN.scatter_op(label,fop,isdiag=False)
-        for block in HN.blocks:
-            ind=block.indexer
-            if block.isnull:
-                continue
-            Eb=block.E[0]*rescalefactor
-            NE=sum(abs(Eb-EG)<gate)
-            if NE==0:
-                continue
-            #trace back source block to get M[0,r]
-            #note that the current block is connected by actting cd to source block.
-            q,m=HN.__decode_token__(ind)
-            block_from=HN.tgetblock(HN.__encode_token__(q-1,m-(0.5-spinindex)))
-            E_from=block_from.E*rescalefactor-EG
-            f_from=block_from.cov_ops[label].get()
-            pdb.set_trace()
-
-            block_to=HN.tgetblock(HN.__encode_token__(q+1,m+(0.5-spinindex)))
-            E_to=block_to.E*rescalefactor-EG
-            f_to=block.cov_ops[label]
-
-            for ie in xrange(NE):
-                #get c-matrices
-                Mr02=(f_from[:,ie].conj()*f_from[:,ie]).real
-                M0r2=(f_to[ie,:].conj()*f_to[ie,:]).real
-
-                A+=(Mr02*self.__smear__(x=ws[...,newaxis],mean=-E_from)).sum(axis=-1)/Z
-                A+=(M0r2*self.__smear__(x=ws[...,newaxis],mean=E_to)).sum(axis=-1)/Z
-
-        #show spectrum for debug
-        if False:
-            if self.cache.has_key('fig'):
-                fig=self.cache.get('fig')
-            else:
-                fig=figure()
-                self.cache['fig']=fig
-            fig.clf()
-            self.show_spec(E_to,b=0.39*wunit,wmax=10*wunit)
-            self.show_spec(-E_from,b=0.39*wunit,wmax=10*wunit)
-            self.show_spec(E-EG,b=0.39*wunit,wmax=10*wunit)
-            axvline(w)
-            axvline(-w)
-            show()
-            legend(['E_to','E_from','E_all'])
-            pdb.set_trace()
-        return array([ws,A])
-
-    def __get_expect_0K2__(self,spinindex,HN,beta,*args,**kwargs):
-        '''
-        Get spectrum for zero temperature with whole Energy spectrum.
-
-        HN:
-            an instance of RGHamiltonian.
-        beta:
-            the inverse of temperature.
-        '''
-        rescalefactor=HN.rescalefactor
-        gate=rescalefactor*1e-4
-        #specific energy spectrum to extract
-        ws=self.__get_w__(rescalefactor)
-        #get the operator for c^dag
-        label='f%s%s'%(self.site,'up' if spinindex==0 else 'dn')
-        #gate value to view energy the same(to detect energy degeneracy).
-
-        E=HN.E_rescaled
-        opmatrix=HN.collect_op(label)
-        if issparse(opmatrix):
-            opmatrix=opmatrix.toarray()
-        EG=E.min()
-
-        EIND=where((E-EG)<gate)
-        Z=len(EIND[0])
-        A=0.
-        for i in EIND[0]:
-            Mr02=opmatrix[:,i].conj()*(opmatrix[:,i])
-            M0r2=opmatrix[i,:].conj()*(opmatrix[i,:])
-            A+=(Mr02*self.__smear__(x=ws[...,newaxis],mean=-(E-EG))).sum(axis=-1)/Z
-            A+=(M0r2*self.__smear__(x=ws[...,newaxis],mean=E-EG)).sum(axis=-1)/Z
-        return array([ws,A.real])
-
-    def __get_expect_finite__(self,spinindex,HN,beta,*args,**kwargs):
-        '''
-        Get spectrum for zero temperature with whole Energy spectrum.
-
-        HN:
-            an instance of RGHamiltonian.
-        beta:
-            the inverse of temperature.
-        '''
-        if self.stopped:
-            return None
-
-        rescalefactor=HN.rescalefactor
-        ws,b=self.__get_ws__(rescalefactor)
-        w=self.setting['wfactor']*wunit
-        label='f%s%s'%(self.site,'up' if spinindex==0 else 'dn')
-
-        E=HN.E*rescalefactor
-        opmatrix=HN.collect_op(label)
-        EG=E.min()
-        rho=exp(-(E-EG)/self.T)
-        Z=sum(rho)
-        #below the temperature
-        if w<self.T and False:
-            b=self.T/w/4.
-            self.stopped=True
-        else:
-            #decide energy spectrum and smearing factor
-            ws=array([-w,w])
-
-            opmatrix=HN.collect_op(label)
-            opmatrix=(opmatrix*opmatrix.conj()).real
-            distri=rho[...,newaxis]+rho[newaxis,...]
-            delta_peak=self.__smear__(x=ws[...,newaxis,newaxis],mean=E[:,newaxis]-E[newaxis,:],b=b)*distri
-            A=(opmatrix*delta_peak).sum(axis=(-1,-2))/Z
-        return array([ws,A])
-
-    def __get_expect_rho__(self,spinindex,HN,beta,*args,**kwargs):
-        '''
-        Get spectrum for zero temperature with whole Energy spectrum.
-
-        spinindex:
-            0 for spin up and 1 for spin down.
-        HN:
-            an instance of RGHamiltonian.
-        beta:
-            the inverse of temperature.
-        '''
-        rescalefactor=HN.rescalefactor
-        gate=rescalefactor*1e-4
-        #get the operator for c^dag
-        label='f%s%s'%(self.site,'up' if spinindex==0 else 'dn')
-        #gate value to view energy the same(to detect energy degeneracy).
-        E=HN.E_rescaled
-        opmatrix=HN.collect_op(label)
-
-        #cache it for later usage.
-        self.cache['flist'].append(opmatrix)
-        self.cache['elist'].append(E)
-        self.cache['rslist'].append(rescalefactor)
-
-        #measure
-        if HN.N==self.setting['rho-measurepoint']:
-            flist=self.cache['flist']
-            elist=self.cache['elist']
-            rslist=self.cache['rslist']
-            ndata=len(elist)
-            rholist=HN.rho_red_list()[2:]   #pity here that we do not start from zero!
-            Alist=[]
-            wlist=[]
-            for i in xrange(ndata):
-                M=flist[i]
-                Ei=elist[i]
-                rho=rholist[i]
-                rescalefactor=rslist[i]
-                #specify energy spectrum to extract
-                ws=self.__get_w__(rescalefactor)
-                delta_peak=self.__smear__(x=ws[...,newaxis,newaxis],mean=Ei[:,newaxis]-Ei[newaxis,:])
-                A=trace(bcast_dot(delta_peak*(dot(rho,M)+dot(M,rho)),M.T.conj()),axis1=-1,axis2=-2).real
-                wlist=append(wlist,ws)
-                Alist=concatenate([Alist,A],axis=0)
-            rightorder=argsort(wlist)
-            return wlist[rightorder],Alist[rightorder]
-
-    def show_flow(self,graph,xdata):
-        '''
-        Get suitible scale,data to plot.
-
-        scale:
-            the x-axis
-        '''
-        if graph:
-            fig,ax,pls=graph
-        else:
-            ax=gca()
-            pls=ax.plot([],[],**kwargs)
-        rcParams['xtick.labelsize']=14
-        rcParams['ytick.labelsize']=14
-        rcParams['axes.labelsize']=14
-
-        if self.mode=='rho':
-            if len(self.flow)>0:
-                data=self.flow[-1]
-            else:
-                data=zeros(2)
-        plotmode=self.setting['plotmode']
-        if plotmode=='even':
-            sl=slice(None,None,2)
-        elif plotmode=='odd':
-            sl=slice(1,None,2)
-        else:
-            sl=slice(None,None)
-        wdata,A=data[sl,0].ravel(),data[sl,1].ravel()
-
-        sind=argsort(wdata)
-        wdata,A=wdata[sind],A[sind,newaxis]
-        if self.logscale:
-            wscale=log(abs(wdata))/log(10)
-            wp=wscale[wdata>0]
-            wn=wscale[wdata<0]
-            wscale[wdata>0]=wp-wp.min()
-            wscale[wdata<0]=wn-wn.max()
-            xdata=linspace(wscale.min(),wscale.max(),len(wscale))
-        if self.setting['continuate']=='spline' and len(wdata)>2:
-            Afunc=spline1d(wdata,A,k=2)
-            xdata=linspace(wdata.min(),wdata.max(),10000)
-            A=Afunc(xdata)
-            #tck=splrep(wdata,A,k=3)
-            #xdata=linspace(wdata.min(),wdata.max(),400)
-            #A=splev(float64(wdata),tck,der=0)
-        else:
-            warnings.warn('plot mode unknown @%s'%self)
-
-        pls[0].set_xdata(xdata)  #update data
-        pls[0].set_ydata(A)  #update data
-        ax.set_ylabel('A')
-        ax.set_ylim(0,A.max()+0.01)
-        ax.set_xlim(xdata.min(),xdata.max())
-        ax.set_xlabel(r'$\omega$',fontsize=20)
-        if graph:
-            fig.canvas.draw()
-
-    def show_spec(self,elist,ax=None,wmax=1.1,b=1e-3):
-        '''
-        show spectrum of the elist.
-
-        wmax:
-            the maximum energy.
-        ax:
-            axis
-        elist:
-            the energy list.
-        b:
-            broadening, default is 1e-4
-        '''
-        if ax is None:
-            ax=gca()
-        wlist=linspace(-wmax,wmax,5000)
-        delta_peak_show=self.__smear__(x=wlist[...,newaxis],mean=elist[newaxis,...]).sum(axis=-1)
-        ax.plot(wlist,delta_peak_show)
-
-    def get_expect(self,HN,*args,**kwargs):
-        '''
-        Get the expectation value of Tchi.
-
-        HN:
-            the hamiltonian instance.
-        '''
-        spinindex=self.spinindex
-        if self.mode=='rho':
-            ms=self.__get_expect_rho__(spinindex,HN,*args,**kwargs)
-        elif self.T==0:
-            #if isinstance(HN,BlockHamiltonian):
-                #ms=self.__get_expect_0K__(spinindex,HN,*args,**kwargs)
-            #else:
-            ms=self.__get_expect_0K2__(spinindex,HN,*args,**kwargs)
-        else:
-            ms=self.__get_expect_finite__(spinindex,HN,*args,**kwargs)
-        return ms
+        raise NotImplementedError()
 
 class RGobj_ABS(RGobj):
     '''
@@ -693,7 +158,7 @@ class RGobj_ABS(RGobj):
         rescalefactor:
             the rescaling factor for energy.
         '''
-        E=sort(HN.E_rescaled)[:self.datalen+1]
+        E=sort(HN.E_true)[:self.datalen+1]
         if len(E)<self.datalen+1:
             print 'GAP = UNKNOWN.'
             return None
