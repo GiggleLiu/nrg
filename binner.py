@@ -4,11 +4,28 @@ Bin method for spectrum calculation.
 '''
 
 from numpy import *
-from core.utils import find_closest
-from core.mathlib import log_gaussian_fast,lorenzian,gaussian,log_gaussian_var
+from smearlib import log_gaussian_fast,lorenzian,gaussian,log_gaussian_var
 from matplotlib.pyplot import *
 from matplotlib.collections import LineCollection
 import time,pdb
+
+__all__=['Binner']
+
+def find_closest(A,target):
+    '''
+    Find closest element positions.
+
+    A:
+        the array, it should be sorted.
+    target:
+        the target to find.
+    '''
+    idx = A.searchsorted(target)
+    idx = np.clip(idx,1,len(A)-1)
+    left = A[idx-1]
+    right = A[idx]
+    idx -= target - left < right - target
+    return idx
 
 class Binner(object):
     '''
@@ -59,8 +76,9 @@ class Binner(object):
         '''
         show datas.
 
-        lw:
-            the line width.
+        Parameters:
+            :lw: number, the line width.
+            **kwargs, key word arguments for LineCollection.
         '''
         bins=self.bins
         ax=gca()
@@ -74,12 +92,10 @@ class Binner(object):
         '''
         get the spectrum in wlist.
 
-        wlist:
-            the target w-space.
-        smearing_method:
-            the smearing method.
-        b/b0:
-            the broadening(b0 for linear region in mixed mode).
+        Parameters:
+            :wlist: 1D array, the target w-space.
+            :smearing_method: str, the smearing method.
+            :b/b0: float, the broadening(b0 for linear region in mixed mode).
         '''
         bandwidth=self.bins[-1]-self.bins[0]
         btp=self.tp

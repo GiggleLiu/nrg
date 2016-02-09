@@ -20,13 +20,15 @@ except:
     SIZE=1
     RANK=0
 
-def NRGSolve(scaledchain,good_number='NM',maxN=600,show_spec=True):
+__all__=['NRGSolve','NRGEngine']
+
+def NRGSolve(scaledchain,good_number='QM',maxN=600,show_spec=True):
     '''
     Using NRG iteration method to solve a chain.
 
     Parameters:
         :chain: <ScaledChain>, the scaled chain for nrg.
-        :good_number: str('N','NM','M'), the good quantum number.
+        :good_number: str('Q','QM','M' ...), the good quantum number.
         :maxN: integer, the maximum retained energy levels.
         :show_spec: bool, show spectrum during iteraction.
 

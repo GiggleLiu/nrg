@@ -16,6 +16,7 @@ from scale import *
 from rglib.hexpand import NullEvolutor 
 from nrg import NRGSolve
 from rgobj import RGobj_Tchi
+from binner import *
 
 class SChainTest(object):
     '''
@@ -63,7 +64,7 @@ class SChainTest(object):
         '''
         tchiflows=[]
         tchiflows_ghost=[]
-        good_number='N' if self.which=='sc' else 'NM'
+        good_number='Q' if self.which=='sc' else 'QM'
         for bath,scale in zip(self.baths,self.scales):
             scaledchain=ScaledChain(impurity=self.impurity,bath=bath,scale=scale)
             pdb.set_trace()
@@ -104,6 +105,27 @@ class ImpTest(object):
         imp=AndersomImp(U=1.,ed=ed,Bz=Bz)
         assert_allcose(imp.H0,ed*identity(2)+Bz*sz)
 
-SChainTest().check_scaling()
+class TestBinner(object):
+    '''
+    Test for binner.
+    '''
+    def test_gaussian(self):
+        sigma,mu=0.5,0.
+        nsample=100000
+        Es=random.normal(size=nsample,loc=mu,scale=sigma)
+        binner=Binner(bins=linspace(-5,5,10000),tp='linear')
+        binner.push(Es,wl=ones(len(Es)))
+        wlist=linspace(-2,2,1000)
+        pl=1./sqrt(2*pi*sigma**2)*exp(-(wlist-mu)**2/2./sigma**2)
+        ion()
+        spec=binner.get_spec(wlist=wlist,smearing_method='lorenzian',b=2.).real/nsample
+        plot(wlist,spec)
+        plot(wlist,pl)
+        legend(['Binner','True'])
+        pdb.set_trace()
+
+
+#SChainTest().check_scaling()
 #SChainTest().test_chainopc()
-SChainTest().test_nrg()
+#SChainTest().test_nrg()
+TestBinner().test_gaussian()
