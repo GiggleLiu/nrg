@@ -1,110 +1,102 @@
 from scipy import *
 from matplotlib.pyplot import *
+from scipy import sparse as sps
 import pdb,time
 
-#from tdnrg import RGTimeLine
-from scaledchain import ScaledChain
-from rglib.hexpand import MaskedEvolutor,FermionHGen
-from blockmatrix import get_bmgen,tobdmatrix
-from utils import plot_spectrum
-from impurity import NullImp
+from rglib.hexpand import MaskedEvolutor,ExpandGenerator
+from blockmatrix import eigbh,trunc_bm
+from impuritymodel import ImpurityModel,scale_bath
+from plotlib import plot_spectrum
 
-#MPI setting
-try:
-    from mpi4py import MPI
-    COMM=MPI.COMM_WORLD
-    SIZE=COMM.Get_size()
-    RANK=COMM.Get_rank()
-except:
-    COMM=None
-    SIZE=1
-    RANK=0
+__all__=['NRGSolve','callback_spec']
 
-__all__=['NRGSolve','NRGEngine']
-
-def NRGSolve(scaledchain,good_number='QM',maxN=600,show_spec=True):
+def NRGSolve(impurity,bath,Lambda,bmg=None,maxN=800,call_back=None):
     '''
     Using NRG iteration method to solve a chain.
 
     Parameters:
-        :chain: <ScaledChain>, the scaled chain for nrg.
-        :good_number: str('Q','QM','M' ...), the good quantum number.
+        :impurity: <Impurity>,
+        :bath: <Chain>,
+        :Lambda: num/1d array, the scaling factor, start from the impurity spin.
+        :bmg: <BlockMarkerGenerator>,
         :maxN: integer, the maximum retained energy levels.
-        :show_spec: bool, show spectrum during iteraction.
+        :call_back: function, f(iiter,E,kpmask,expander,bm,...) called after each iteraction.
 
     Return:
-        tuple of (evolutor, elist, bms), the <Evolutor>, energy of each iteraction, block marker of each iteraction.
+        dict of (EL, expander, bms), relative energy, expander, block markers for each iteraction.
         
         Note, elist is rescaled back.
     '''
-    nsite=scaledchain.nsite
-    is_ghost=isinstance(scaledchain.impurity,NullImp)
-    scaling_factors=scaledchain.scaling_factors
-    spaceconfig=scaledchain.impurity.spaceconfig
-    h=scaledchain.get_opc()
+    #scale the bath.
+    if ndim(Lambda)==0: Lambda=append([1],Lambda**arange(bath.nsite))
+    bath=scale_bath(bath,Lambda=Lambda[1:])
+    #generate the new model.
+    model=ImpurityModel(impurity,bath)
+    if impurity.H0 is None: Lambda=Lambda[1:]  #run without impurity
+    nsite=model.nsite  #bath.nsite+1 if impurity is not Null
 
-    expander=FermionHGen(spaceconfig=spaceconfig,evolutor=MaskedEvolutor(hndim=spaceconfig.hndim))
-    bmgen=get_bmgen(spaceconfig,good_number)
+    #construct expander and blockmaker generator.
+    expander=ExpandGenerator(model.get_opc(),evolutor_type='masked')
+
+    #ready to run dmrg iteration.
     elist=[]
-    bms=[]
+    H=sps.csr_matrix((1,1),dtype='complex128')
+    if bmg is not None: bm=bmg.bm0; bms=[bm]
     for i in xrange(nsite):
         print 'Running iteraction %s'%(i+1)
-        ops=h.filter(lambda sites:all(sites<=i) and (i in sites))
-        H=expander.expand(ops)
-        bm=bmgen.update_blockmarker(expander.block_marker,kpmask=expander.evolutor.kpmask(i-1))
-        H_bd=bm.blockize(H)
-        if not bm.check_blockdiag(H_bd):
-            raise Exception('Hamiltonian is not block diagonal with good quantum number %s'%good_number)
-        H=tobdmatrix(H_bd,bm)
-        E,U=H.eigh()
+        #rescale H and add one site,
+        if i!=0:
+            H*=Lambda[i]/Lambda[i-1]
+        H=expander.expand1(H)
+        if bmg is not None:
+            bm,pm=bmg.update1(bm,compact_form=True)
+            #block diagonalize hamiltonian and get eigenvalues.
+            H_bd=H[pm][:,pm]
+            if not bm.check_blockdiag(H_bd):
+                raise Exception('Hamiltonian is not block diagonal with good quantum number %s'%good_number)
+            E,U=eigbh(H_bd,bm=bm)
+            U=U.tocsr()[argsort(pm)]    #mul permutaion matrix to U to get a true one.
+        else:
+            E,U=eigh(H)
+
+        #perform the truncation
         E_sorted=sort(E)
-        kpmask=(E<=E_sorted[min(maxN,len(E_sorted))-1])
-        expander.trunc(U=U.tocoo(),block_marker=bm,kpmask=kpmask)
-        if i!=nsite-1:
-            expander.H*=scaling_factors[i+1]/scaling_factors[i]
-        if show_spec:
-            plot_spectrum(E_sorted[:20]-E_sorted[0],offset=[i,0.],lw=1)
-            gcf().canvas.draw()
-            pause(0.01)
-        elist.append(E/scaling_factors[i])
-        bms.append(bm)
-    return expander.evolutor,bms,elist
+        kpmask=E<=E_sorted[min(maxN,len(E_sorted))-1]
+        E=E[kpmask]
+        if bmg is not None: bm=trunc_bm(bm,kpmask); bms.append(bm)
+        expander.trunc(U=U,kpmask=kpmask)
 
-class NRGEngine(object):
+        #rescale and construct the hamiltonian, scale back the energies.
+        H=sps.diags(E)
+        elist.append((E-E.min())/Lambda[i])
+
+        #call back.
+        if call_back is not None:
+            call_back(E=E,expander=expander,kpmask=kpmask,iiter=i,bm=None if bmg is None else bm)
+    if bmg is None:
+        return {'EL':elist,'expander':expander,'model':model}
+    else:
+        return {'EL':elist,'expander':expander,'bms':bms,'model':model}
+
+def callback_spec(NE=20,target_block=None,**kwargs):
     '''
-    An Engine for Numerical Renormalization Group Theory.
+    Show spectrum after each iteration.
+    
+    Paramters:
+        :NE: int, maximum number of levels shown.
+        :target_block: 1d array/function, block label or f(iiter) as block label.
     '''
-    def __init__(self,threadz=False):
-        self.threadz=threadz
-
-    def run(self,chain):
-        '''
-        Run renormalization process.
-
-        chain:
-            the mapped 1D chain.
-        '''
-        chains=[chain] if isinstance(chain,ScaledChain) else chain
-        chain0=chains[0]
-        Ns=chain0.scale.N
-        gatherH=len(self.mops)>0
-
-        for i in xrange(-1,Ns):
-            print '\nCalculating H(i) for %s-th site(-1 for impurity).'%(i,)
-            for ch in chains:
-                ch.scale.set_pinpoint(i)
-                ch.HNquickexpand(N=i,threadz=self.threadz,gather=gatherH)
-                if ch.ghost!=None:
-                    ch.ghost.scale.set_pinpoint(i)
-                    ch.ghost.HNquickexpand(N=i,threadz=self.threadz,gather=gatherH)
-                if (RANK==0 or not self.threadz):
-                    self.do_measure(ch)
-                    print 'Matrix Dimension - ',ch.hdim
-
-        #save datas
-        if RANK==0 or not self.threadz:
-            self.figmanager.saveall()
-            for ch in chains:
-                for op in ch.cache['mops'].values():
-                    op.save_flow()
-        return chains
+    E=kwargs['E']
+    iiter=kwargs['iiter']
+    bm=kwargs['bm']
+    if target_block is None or bm is None:
+        E_sorted=sort(E)
+        plot_spectrum(E_sorted[:NE]-E_sorted[0],offset=[iiter,0.],lw=1)
+    else:
+        if hasattr(target_block,'__call__'):
+            target_block=target_block(iiter)
+        E=bm.extract_block(E,(target_block,),axes=(0,),uselabel=True)-E.min()
+        E_sorted=sort(E)
+        plot_spectrum(E_sorted[:NE]-E_sorted[0],offset=[iiter,0.],lw=1)
+    gcf().canvas.draw()
+    pause(0.01)

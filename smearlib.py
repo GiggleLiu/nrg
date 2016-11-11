@@ -7,14 +7,13 @@ def gaussian(x,mean,b,weights=1.):
     '''
     Gaussian distribution.
 
-    x:
-        x or a list of x.
-    mean:
-        mean value.
-    b:
-        broadening.
-    weights:
-        weights of specific spectrum, it should take the same shape as mean.
+    Parameters:
+        :x: ndarray, x or a list of x.
+        :mean: num, mean value.
+        :b: num, broadening.
+        :weights: ndarray, weights of specific spectrum, it should take the same shape as mean.
+
+    Return: ndarray,
     '''
     return 1./b/sqrt(pi)*exp(-((x-mean)/b)**2)*weights
 
@@ -23,16 +22,15 @@ def log_gaussian(x,mean,weights,b=1.):
     Logarithmic Gaussian broadening for peak.
 
     NOTE:
-        it is asymmetrix about mean and -mean.
+        it is asymmetric about mean and -mean.
 
-    x:
-        x or a list of x.
-    mean:
-        mean value.
-    b:
-        broadening. NOTE: unlike broadening in gaussian, this broadening factor is automatically ajusted according to w.
-    weights:
-        weights of specific spectrum, it should take the same shape as mean.
+    Parameters:
+        :x: ndarray, x or a list of x.
+        :mean: num, mean value.
+        :b: num, broadening.
+        :weights: ndarray, weights of specific spectrum, it should take the same shape as mean.
+
+    Return: ndarray,
     '''
     assert(ndim(x)==1 and ndim(mean)==1 and ndim(weights)==1)
     xmask=x>0
@@ -54,14 +52,13 @@ def log_gaussian_fast(x,mean,weights,b):
     NOTE:
         it is asymmetrix about mean and -mean.
 
-    x:
-        x or a list of x.
-    mean:
-        mean value.
-    weights:
-        weights of specific spectrum, it should take the same shape as mean.
-    b:
-        broadening.
+    Parameters:
+        :x: ndarray, x or a list of x.
+        :mean: num, mean value.
+        :b: num, broadening.
+        :weights: ndarray, weights of specific spectrum, it should take the same shape as mean.
+
+    Return: ndarray,
     '''
     assert(ndim(x)==1 and ndim(mean)==1 and shape(weights)==shape(mean) and shape(b)==shape(x))
     if len(mean)==0:
@@ -84,16 +81,14 @@ def log_gaussian_var(x,mean,weights,b,w0,b0=None):
     NOTE:
         it is asymmetric about x and -x.
 
-    x:
-        x or a list of x.
-    mean:
-        mean value.
-    weights:
-        weights of specific spectrum, it should take the same shape as mean.
-    b:
-        broadening.
-    w0/b0:
-        the transition points and it's smearing parameter, will use w0 by default.
+    Parameters:
+        :x: ndarray, x or a list of x.
+        :mean: num, mean value.
+        :b: num, broadening.
+        :weights: ndarray, weights of specific spectrum, it should take the same shape as mean.
+        :w0/b0: num, the transition points and it's smearing parameter, will use w0 by default.
+
+    Return: ndarray,
     '''
     assert(ndim(x)==1 and ndim(mean)==1 and shape(weights)==shape(mean) and ndim(b)==0)
     if len(mean)==0:
@@ -104,14 +99,13 @@ def lorenzian(x,mean,b,weights=1.):
     '''
     Lorenzian broadening for a peak.
 
-    x:
-        x or a list of x.
-    mean:
-        mean value.
-    b:
-        broadening.
-    weights:
-        weights of specific spectrum, it should take the same shape as mean.
+    Parameters:
+        :x: ndarray, x or a list of x.
+        :mean: num, mean value.
+        :b: num, broadening.
+        :weights: ndarray, weights of specific spectrum, it should take the same shape as mean.
+
+    Return: ndarray,
     '''
     return weights*(1./pi/(x-1j*b-mean)).imag
 

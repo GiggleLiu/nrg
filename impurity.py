@@ -3,11 +3,11 @@ from numpy import *
 from tba.hgen import SuperSpaceConfig,sz,sx,sy
 from tba.hgen import op_U,Operator
 
-__all__=['NRGImp','AndersonImp','KondoImp','SC2Anderson','NullImp']
+__all__=['Impurity','AndersonImp','KondoImp','SC2Anderson','NullImp','FreeImp']
 
-class NRGImp(object):
+class Impurity(object):
     '''
-    An standard application for NRG to run.
+    Impurity.
     '''
     def __init__(self,spaceconfig,H0):
         self.spaceconfig=spaceconfig
@@ -22,7 +22,7 @@ class NRGImp(object):
         '''
         raise NotImplementedError()
 
-class KondoImp(NRGImp):
+class KondoImp(Impurity):
     '''
     Kondo Impurity for NRG.
     '''
@@ -34,7 +34,7 @@ class KondoImp(NRGImp):
         H0=ed*identity(2)+Bz*sz
         super(KondoImp,self).__init__(scfg,H0)
 
-class AndersonImp(NRGImp):
+class AndersonImp(Impurity):
     '''
     Anderson Impurity for NRG.
 
@@ -73,13 +73,27 @@ class AndersonImp(NRGImp):
         '''
         return self.U*op_U(self.spaceconfig)
 
-class NullImp(NRGImp):
+class NullImp(Impurity):
     '''
     Null Impurity for NRG.
     '''
     def __init__(self):
         scfg=SuperSpaceConfig([1,2,1,1])
-        H0=zeros([2,2])
+        super(NullImp,self).__init__(scfg,H0=None)
+
+    def get_interaction(self):
+        '''
+        Get the interaction operator.
+        '''
+        return Operator('',spaceconfig=self.spaceconfig)
+
+class FreeImp(Impurity):
+    '''
+    Free Impurity for NRG, 0 - energy single site.
+    '''
+    def __init__(self,mu=0.):
+        scfg=SuperSpaceConfig([1,2,1,1])
+        H0=-mu*identity(scfg.ndim)
         super(NullImp,self).__init__(scfg,H0)
 
     def get_interaction(self):
@@ -94,5 +108,3 @@ def SC2Anderson(ed=0.,U=1.,Bz=0.):
     '''
     scfg=SuperSpaceConfig([1,2,1,1])
     return AndersonImp(ed=U/2.+Bz,U=-U,Bz=(ed+U/2.))
-
-

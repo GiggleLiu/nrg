@@ -1,10 +1,12 @@
 from numpy import *
 from matplotlib.pyplot import *
 from numpy.testing import dec,assert_,assert_raises,assert_almost_equal,assert_allclose
-import pdb,time
+import pdb,time,sys
+sys.path.insert(0,'../')
 
 from scale import *
 from nrgmap import get_ticker
+from plotlib import show_scale
 
 class ScaleTest(object):
     def __init__(self):
@@ -14,15 +16,6 @@ class ScaleTest(object):
         self.ticker=get_ticker('log',Lambda=self.Lambda,D=self.D)
         tickers=[self.ticker,self.ticker]
         self.scale=ticker2scale(tickers,N=self.N,z=0.5)
-
-    def test_saveload(self):
-        token='test_ticker'
-        self.scale.save(token)
-        scale2=load_scale(token)
-        assert_(all(scale2._data==self.scale._data))
-        assert_(all(scale2._data_neg==self.scale._data_neg))
-        assert_(scale2.z==self.scale.z)
-        assert_(scale2.N==self.scale.N)
 
     def test_interval(self):
         assert_almost_equal(self.scale[-1],-self.ticker.D)
@@ -35,12 +28,12 @@ class ScaleTest(object):
             assert_allclose(self.scale.interval(-i-1),-self.scale.interval(i+1)[::-1])
 
     def test_show(self):
-        self.scale.show()
-        show()
+        ion()
+        show_scale(self.scale)
+        pdb.set_trace()
 
     def test_all(self):
         self.test_interval()
-        self.test_saveload()
         self.test_show()
 
 ScaleTest().test_all()

@@ -4,13 +4,14 @@ Tests for nrg.
 from numpy import *
 from matplotlib import pyplot as plt
 from numpy.testing import dec,assert_,assert_raises,assert_almost_equal,assert_allclose
+import pdb,time,sys
+sys.path.insert(0,'../')
 
 from nrgmap import quick_map,get_wlist,check_disc,map2chain,check_spec
 from dfunclib import *
 from impurity import *
 from tba.hgen import SpaceConfig,SuperSpaceConfig
 from tba.hgen.utils import sz,sx,sy
-from rglib.hexpand import Evolutor,FermionHGen
 from scaledchain import *
 from scale import *
 from rglib.hexpand import NullEvolutor 
@@ -34,10 +35,9 @@ class SChainTest(object):
         tickers,discmodel=quick_map(wlist=wlist,rhofunc=self.rhofunc,N=N,z=zl,\
                 tick_params={'tick_type':'adaptive','Lambda':Lambda})
         #map it to a Wilson chain
-        self.baths=map2chain(discmodel,prec=5000)
+        self.baths=map2chain(discmodel)
         self.scales=[ticker2scale(tickers,N,z) for z in zl]
-        evolutor=NullEvolutor(hndim=spaceconfig.hndim)
-        expander=FermionHGen(spaceconfig=spaceconfig,evolutor=evolutor)
+        expander=RGHGen(H=self.baths[0],spaceconfig=spaceconfig,evolutor_type='null')
 
     def set_rhofunc(self,which):
         if which=='flat':
@@ -113,19 +113,21 @@ class TestBinner(object):
         sigma,mu=0.5,0.
         nsample=100000
         Es=random.normal(size=nsample,loc=mu,scale=sigma)
-        binner=Binner(bins=linspace(-5,5,10000),tp='linear')
-        binner.push(Es,wl=ones(len(Es)))
+        binner=Binner(bins=linspace(-5,5,10000))
+        binner.push(Es,wl=1.)
         wlist=linspace(-2,2,1000)
         pl=1./sqrt(2*pi*sigma**2)*exp(-(wlist-mu)**2/2./sigma**2)
         ion()
-        spec=binner.get_spec(wlist=wlist,smearing_method='lorenzian',b=2.).real/nsample
-        plot(wlist,spec)
+        smethods=['lorenzian','gaussian']
+        for sm in smethods:
+            spec=binner.get_spec(wlist=wlist,smearing_method=sm,b=2.,window=[-1,1]).real/nsample
+            plot(wlist,spec)
         plot(wlist,pl)
-        legend(['Binner','True'])
+        legend(smethods+['Origin'])
         pdb.set_trace()
 
 
 #SChainTest().check_scaling()
 #SChainTest().test_chainopc()
-#SChainTest().test_nrg()
 TestBinner().test_gaussian()
+SChainTest().test_nrg()
