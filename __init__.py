@@ -5,4 +5,4 @@ from binner import *
 from impurity import *
 from impuritymodel import *
 
-__all__=['smearlib','nrg','binner','plotlib','impurity','impuritymodel']
+__all__ = ['smearlib', 'nrg', 'binner', 'plotlib', 'impurity', 'impuritymodel']
