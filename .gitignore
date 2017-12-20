@@ -4,7 +4,6 @@
 *.swp
 *.o
 *.so
-*.png
 deprecated/
 *.pyf
 *.eps
